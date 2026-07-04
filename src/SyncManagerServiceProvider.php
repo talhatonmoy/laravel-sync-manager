@@ -12,6 +12,7 @@ use DeployCar\LaravelSyncManager\Console\Commands\RestoreLocalCommand;
 use DeployCar\LaravelSyncManager\Console\Commands\RunCommand;
 use DeployCar\LaravelSyncManager\Console\Commands\ScanCommand;
 use DeployCar\LaravelSyncManager\Console\Commands\SendCommand;
+use DeployCar\LaravelSyncManager\Console\Commands\SyncCommand;
 use DeployCar\LaravelSyncManager\Contracts\ApplyServiceInterface;
 use DeployCar\LaravelSyncManager\Contracts\ChangeDetectorInterface;
 use DeployCar\LaravelSyncManager\Contracts\FileScannerInterface;
@@ -86,6 +87,7 @@ class SyncManagerServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
+                SyncCommand::class,
                 ScanCommand::class,
                 SendCommand::class,
                 RunCommand::class,
