@@ -21,7 +21,6 @@ class RollbackService implements RollbackServiceInterface
         protected ObjectStoreInterface $objectStore,
         protected BackupManager $backupManager,
         protected LockManager $lockManager,
-        protected NotificationService $notificationService,
         protected PathSecurity $pathSecurity,
         protected SecurityGateInterface $securityGate
     ) {
@@ -129,10 +128,6 @@ class RollbackService implements RollbackServiceInterface
                 $targetVersion->forceFill(['rolled_back_at' => now()])->save();
 
                 $this->report($progress, 100, 'completed', 'Incremental rollback completed successfully.');
-                $this->notificationService->notify('DeployCar rollback succeeded', [
-                    'version_id' => $operationVersion->version_id,
-                    'rollback_to' => $targetVersion->version_id,
-                ]);
 
                 return [
                     'status' => 'success',
@@ -146,11 +141,6 @@ class RollbackService implements RollbackServiceInterface
                     'metadata' => array_merge($operationVersion->metadata ?? [], [
                         'error' => $exception->getMessage(),
                     ]),
-                ]);
-                $this->notificationService->notify('DeployCar rollback failed', [
-                    'version_id' => $operationVersion->version_id,
-                    'rollback_to' => $targetVersion->version_id,
-                    'error' => $exception->getMessage(),
                 ]);
 
                 throw $exception;

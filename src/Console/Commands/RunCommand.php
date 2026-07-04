@@ -12,7 +12,7 @@ class RunCommand extends Command
 {
     use RequiresStrictProductionConfirmation;
 
-    protected $signature = 'sync:run {target?} {--all} {--queued} {--force}';
+    protected $signature = 'sync:run {target?} {--all} {--no-delete} {--force}';
 
     protected $description = 'Alias for sync:send.';
 
@@ -22,13 +22,7 @@ class RunCommand extends Command
             return self::FAILURE;
         }
 
-        if ($this->option('queued')) {
-            $response = $sender->dispatch($this->option('all'), $this->argument('target'));
-            $this->line(json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-
-            return self::SUCCESS;
-        }
-
+        config(['sync.no_delete' => $this->option('no-delete')]);
         if ($this->option('all')) {
             $response = $sender->sendAll();
             $this->line(json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));

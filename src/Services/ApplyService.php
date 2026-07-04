@@ -54,6 +54,10 @@ class ApplyService implements ApplyServiceInterface
                 foreach ($files as $file) {
                     $relativePath = $this->pathSecurity->assertSafe((string) $file['path']);
 
+                    if ($file['status'] === 'delete_later') {
+                        continue;
+                    }
+
                     if (! $this->objectStore->has((string) $file['hash'])) {
                         throw new RuntimeException("Required object [{$file['hash']}] for [{$relativePath}] is missing.");
                     }
@@ -63,16 +67,31 @@ class ApplyService implements ApplyServiceInterface
                 $this->guardAgainstConflicts($files, $expectedState, $currentState);
 
                 $backup = $this->backupManager->backupFiles($version->version_id, array_map(static fn (array $file) => $file['path'], $files));
-                $this->report($progress, 45, 'applying', 'Applying changed files from the verified object store.');
+                $this->report($progress, 45, 'staging', 'Writing changed files to staging area.');
 
+                $stagingRoot = rtrim((string) config('sync.storage_root'), DIRECTORY_SEPARATOR)
+                    .'/staging/'.$version->version_id;
+
+                // Phase 1 — stage ALL files before touching destination.
                 foreach ($files as $file) {
                     $path = $this->pathSecurity->assertSafe((string) $file['path']);
                     $this->securityGate->assertSafe($path);
+
+                    if (($file['status'] ?? '') === 'delete_later') {
+                        continue;
+                    }
+
+                    $stagingPath = $stagingRoot.'/'.str_replace('/', DIRECTORY_SEPARATOR, $path);
+                    $this->files->ensureDirectoryExists(dirname($stagingPath));
+                    $this->files->copy($this->objectStore->path((string) $file['hash']), $stagingPath);
+                }
+
+                // Phase 2 — atomic rename swap: staging → destination (crash-safe).
+                foreach ($files as $file) {
+                    $path = $this->pathSecurity->assertSafe((string) $file['path']);
                     $destination = base_path(str_replace('/', DIRECTORY_SEPARATOR, $path));
 
-                    $status = $file['status'] ?? '';
-
-                    if ($status === 'delete_later') {
+                    if (($file['status'] ?? '') === 'delete_later') {
                         if ($this->files->exists($destination)) {
                             $this->files->delete($destination);
                         }
@@ -80,10 +99,14 @@ class ApplyService implements ApplyServiceInterface
                         continue;
                     }
 
-                    $source = $this->objectStore->path((string) $file['hash']);
-
+                    $stagingPath = $stagingRoot.'/'.str_replace('/', DIRECTORY_SEPARATOR, $path);
                     $this->files->ensureDirectoryExists(dirname($destination));
-                    $this->files->copy($source, $destination);
+                    $this->files->move($stagingPath, $destination);
+                }
+
+                // Clean up staging dir.
+                if ($this->files->isDirectory($stagingRoot)) {
+                    $this->files->deleteDirectory($stagingRoot);
                 }
 
                 $manifestRecord = $this->manifestRepository->create([
@@ -129,6 +152,11 @@ class ApplyService implements ApplyServiceInterface
                     'target' => $targetName,
                 ];
             } catch (\Throwable $exception) {
+                // Clean up staging dir on failure.
+                if (isset($stagingRoot) && $this->files->isDirectory($stagingRoot)) {
+                    $this->files->deleteDirectory($stagingRoot);
+                }
+
                 if (isset($backup['backup_root'])) {
                     $this->restoreBackups($backup['backup_root'].'/files');
                 }

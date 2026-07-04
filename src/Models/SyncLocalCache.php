@@ -4,13 +4,14 @@ namespace DeployCar\LaravelSyncManager\Models;
 
 use Illuminate\Database\Eloquent\Model;
 
-class SyncSetting extends Model
+class SyncLocalCache extends Model
 {
-    protected $table = 'sync_settings';
+    protected $table = 'sync_local_cache';
 
     protected $guarded = [];
 
     protected $casts = [
-        'value' => 'array',
+        'mtime' => 'integer',
+        'size' => 'integer',
     ];
 }

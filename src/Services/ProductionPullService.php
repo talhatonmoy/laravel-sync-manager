@@ -8,7 +8,6 @@ use DeployCar\LaravelSyncManager\Contracts\IncrementalTransportInterface;
 use DeployCar\LaravelSyncManager\Contracts\LocalBackupServiceInterface;
 use DeployCar\LaravelSyncManager\Contracts\ManifestRepositoryInterface;
 use DeployCar\LaravelSyncManager\Contracts\ObjectStoreInterface;
-use DeployCar\LaravelSyncManager\Contracts\OperationTrackerInterface;
 use DeployCar\LaravelSyncManager\Contracts\ProductionPullServiceInterface;
 use DeployCar\LaravelSyncManager\Contracts\SecurityGateInterface;
 use DeployCar\LaravelSyncManager\Contracts\StateRepositoryInterface;
@@ -28,8 +27,6 @@ class ProductionPullService implements ProductionPullServiceInterface
         protected ManifestRepositoryInterface $manifestRepository,
         protected VersionManagerInterface $versionManager,
         protected LocalBackupServiceInterface $localBackupService,
-        protected OperationTrackerInterface $operationTracker,
-        protected NotificationService $notificationService,
         protected Filesystem $files,
         protected PathSecurity $pathSecurity,
         protected SecurityGateInterface $securityGate,
@@ -103,9 +100,6 @@ class ProductionPullService implements ProductionPullServiceInterface
             ],
         ]);
 
-        if ($operationId) {
-            $this->operationTracker->attachVersion($operationId, $version->id);
-        }
 
         try {
             $changes = [];
@@ -160,12 +154,6 @@ class ProductionPullService implements ProductionPullServiceInterface
             ]);
 
             $this->report($progress, 100, 'completed', 'Production-first pull completed.');
-            $this->notificationService->notify('DeployCar production pull succeeded', [
-                'version_id' => $versionId,
-                'target' => $target['name'],
-                'summary' => $preview['summary'],
-            ]);
-
             return [
                 'status' => 'success',
                 'version_id' => $versionId,
@@ -183,12 +171,6 @@ class ProductionPullService implements ProductionPullServiceInterface
                     'error' => $exception->getMessage(),
                 ]),
             ]);
-            $this->notificationService->notify('DeployCar production pull failed', [
-                'version_id' => $versionId,
-                'target' => $target['name'],
-                'error' => $exception->getMessage(),
-            ]);
-
             throw $exception;
         }
     }

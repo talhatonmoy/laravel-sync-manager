@@ -12,7 +12,7 @@ class SendCommand extends Command
 {
     use RequiresStrictProductionConfirmation;
 
-    protected $signature = 'sync:send {target?} {--all} {--queued} {--force}';
+    protected $signature = 'sync:send {target?} {--all} {--no-delete} {--force}';
 
     protected $description = 'Detect changed files and push only the required objects to the configured target.';
 
@@ -23,13 +23,7 @@ class SendCommand extends Command
                 return self::FAILURE;
             }
 
-            if ($this->option('queued')) {
-                $response = $sender->dispatch($this->option('all'), $this->argument('target'));
-                $this->line(json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
-
-                return self::SUCCESS;
-            }
-
+            config(['sync.no_delete' => $this->option('no-delete')]);
             if ($this->option('all')) {
                 $response = $sender->sendAll();
                 $this->line(json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
@@ -37,6 +31,7 @@ class SendCommand extends Command
                 return self::SUCCESS;
             }
 
+            config(['sync.no_delete' => $this->option('no-delete')]);
             $reporter = new ConsoleProgressReporter($this, 'Sync send');
             $response = app(SyncCoordinatorInterface::class)->applyLocalFirst(
                 $this->argument('target'),

@@ -13,17 +13,6 @@ class Phase3FeatureTest extends TestCase
     use RefreshDatabase;
     use SignsSyncRequests;
 
-    // ---------- H2: require_auth flag ----------
-
-    public function test_require_auth_gates_local_environment(): void
-    {
-        config()->set('sync.ui.require_auth', true);
-
-        $response = $this->get('/sync/local');
-
-        $response->assertForbidden();
-    }
-
     // ---------- L2: delete_later physically unlinks file ----------
 
     public function test_delete_later_removes_file_from_disk(): void

@@ -8,16 +8,18 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('sync_settings', function (Blueprint $table): void {
+        Schema::create('sync_local_cache', function (Blueprint $table): void {
             $table->id();
-            $table->string('key')->unique();
-            $table->json('value')->nullable();
+            $table->string('path')->unique();
+            $table->unsignedBigInteger('mtime');
+            $table->unsignedBigInteger('size');
+            $table->string('hash');
             $table->timestamps();
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('sync_settings');
+        Schema::dropIfExists('sync_local_cache');
     }
 };

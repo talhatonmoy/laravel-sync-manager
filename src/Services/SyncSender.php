@@ -7,11 +7,9 @@ use DeployCar\LaravelSyncManager\Contracts\FileScannerInterface;
 use DeployCar\LaravelSyncManager\Contracts\IncrementalTransportInterface;
 use DeployCar\LaravelSyncManager\Contracts\ManifestRepositoryInterface;
 use DeployCar\LaravelSyncManager\Contracts\ObjectStoreInterface;
-use DeployCar\LaravelSyncManager\Contracts\OperationTrackerInterface;
 use DeployCar\LaravelSyncManager\Contracts\StateRepositoryInterface;
 use DeployCar\LaravelSyncManager\Contracts\SyncSenderInterface;
 use DeployCar\LaravelSyncManager\Contracts\VersionManagerInterface;
-use DeployCar\LaravelSyncManager\Jobs\ExecuteSyncOperationJob;
 use Illuminate\Support\Str;
 use RuntimeException;
 
@@ -25,29 +23,29 @@ class SyncSender implements SyncSenderInterface
         protected StateRepositoryInterface $stateRepository,
         protected ManifestRepositoryInterface $manifestRepository,
         protected VersionManagerInterface $versionManager,
-        protected TargetResolver $targetResolver,
-        protected OperationTrackerInterface $operationTracker,
-        protected NotificationService $notificationService
+        protected TargetResolver $targetResolver
     ) {
     }
 
     public function dryRun(?string $targetName = null, ?callable $progress = null): array
     {
         $target = $this->resolveTarget($targetName);
-        $this->report($progress, 10, 'fetching-state', 'Fetching the current target state.');
-        $remoteState = $this->transport->fetchState($target);
-        $this->report($progress, 45, 'scanning-local', 'Scanning local files and hashing content.');
+        $this->report($progress, 20, 'scanning-local', 'Scanning local files (using scan-cache for unchanged files).');
         $localFiles = $this->scanner->scan();
+
+        $this->report($progress, 45, 'loading-tracked-state', 'Loading last-known target state from local database.');
+        $trackedState = $this->stateRepository->forTarget($target['name']);
+
         $this->report($progress, 80, 'diffing', 'Comparing local files with the tracked target state.');
-        $result = array_merge(
-            $this->changeDetector->detect($localFiles, $remoteState['files'] ?? []),
-            [
-                'target' => $target['name'],
-                'manifest_id' => $remoteState['manifest_id'] ?? null,
-                'engine' => 'incremental',
-            ]
-        );
-        $this->report($progress, 100, 'completed', 'Incremental preview completed.');
+        $diff = $this->changeDetector->detect($localFiles, $trackedState);
+
+        $result = array_merge($diff, [
+            'target' => $target['name'],
+            'manifest_id' => $this->stateRepository->latestManifestId($target['name']),
+            'engine' => 'incremental',
+            'mode' => 'local-only',
+        ]);
+        $this->report($progress, 100, 'completed', 'Local preview completed.');
 
         return $result;
     }
@@ -85,52 +83,23 @@ class SyncSender implements SyncSenderInterface
         ];
     }
 
-    public function dispatch(bool $all = false, ?string $targetName = null): array
-    {
-        $targets = $all ? $this->targetResolver->all() : [$this->resolveTarget($targetName)];
-        $queued = [];
-
-        foreach ($targets as $target) {
-            $operation = $this->operationTracker->start([
-                'type' => 'apply-local-first',
-                'strategy' => 'local-first',
-                'target_name' => $target['name'],
-                'status' => 'queued',
-                'message' => 'Queued incremental local-first sync.',
-                'metadata' => [
-                    'engine' => 'incremental',
-                    'queued_via' => 'cli',
-                ],
-            ]);
-
-            ExecuteSyncOperationJob::dispatchConfigured(
-                $operation->operation_id,
-                'apply-local-first',
-                ['target' => $target['name']]
-            );
-
-            $queued[] = [
-                'target' => $target['name'],
-                'operation_id' => $operation->operation_id,
-            ];
-        }
-
-        return [
-            'status' => 'queued',
-            'targets' => $queued,
-        ];
-    }
-
     public function sendToTarget(array $target, ?callable $progress = null, ?string $operationId = null): array
     {
         $this->report($progress, 5, 'fetching-state', 'Fetching the current target state.');
         $remoteState = $this->transport->fetchState($target);
         $expectedState = $remoteState['files'] ?? [];
 
+        $noDelete = config('sync.no_delete', false);
         $this->report($progress, 20, 'scanning-local', 'Scanning local files and preparing changed blobs.');
         $localFiles = $this->scanner->scan();
         $diff = $this->changeDetector->detect($localFiles, $expectedState);
         $changes = $diff['files'];
+
+        // Merge deleted files into the manifest so the receiver removes them.
+        if (! $noDelete) {
+            $changes = array_merge($changes, $diff['delete_later'] ?? []);
+            $diff['summary']['delete_later'] = count($diff['delete_later'] ?? []);
+        }
 
         if ($changes === []) {
             $this->report($progress, 100, 'completed', 'No file changes detected for this target.');
@@ -213,10 +182,6 @@ class SyncSender implements SyncSenderInterface
             'completed_at' => now(),
         ]);
 
-        if ($operationId) {
-            $this->operationTracker->attachVersion($operationId, $version->id);
-        }
-
         $manifest['signature'] = $response['manifest_signature'] ?? null;
         $this->manifestRepository->create([
             'manifest_id' => $manifestId,
@@ -234,12 +199,6 @@ class SyncSender implements SyncSenderInterface
         $mergedState = $this->stateRepository->merge($target['name'], $manifest['files'], $manifestId);
         $this->versionManager->replaceFiles($version, $this->snapshotFiles($mergedState));
         $this->report($progress, 100, 'completed', 'Incremental local-first sync completed.');
-
-        $this->notificationService->notify('DeployCar incremental sync succeeded', [
-            'version_id' => $versionId,
-            'target' => $target['name'],
-            'summary' => $diff['summary'],
-        ]);
 
         return [
             'status' => 'success',

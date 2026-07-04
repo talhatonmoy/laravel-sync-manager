@@ -5,6 +5,7 @@ namespace DeployCar\LaravelSyncManager\Services;
 use DeployCar\LaravelSyncManager\Contracts\FileScannerInterface;
 use DeployCar\LaravelSyncManager\Contracts\IgnoreManagerInterface;
 use DeployCar\LaravelSyncManager\Contracts\SecurityGateInterface;
+use DeployCar\LaravelSyncManager\Models\SyncLocalCache;
 use DeployCar\LaravelSyncManager\Support\PathNormalizer;
 use Illuminate\Filesystem\Filesystem;
 
@@ -34,15 +35,20 @@ class FileScanner implements FileScannerInterface
 
             $this->securityGate->assertSafe($relativePath);
 
-            $hash = hash_file('sha256', $absolutePath);
+            $currentMtime = $file->getMTime();
+            $currentSize = $file->getSize();
+
+            // Scan-cache: reuse hash when mtime and size haven't changed.
+            $hash = $this->resolveHash($relativePath, $currentMtime, $currentSize, $absolutePath);
+
             $target = $targetState[$relativePath] ?? null;
             $status = $target === null ? 'add' : (($target['hash'] ?? null) === $hash ? 'unchanged' : 'modify');
 
             $entries[] = [
                 'path' => $relativePath,
                 'hash' => $hash,
-                'size' => $file->getSize(),
-                'modified_at' => date(DATE_ATOM, $file->getMTime()),
+                'size' => $currentSize,
+                'modified_at' => date(DATE_ATOM, $currentMtime),
                 'status' => $status,
             ];
         }
@@ -50,6 +56,32 @@ class FileScanner implements FileScannerInterface
         usort($entries, static fn (array $left, array $right) => strcmp($left['path'], $right['path']));
 
         return $entries;
+    }
+
+    /**
+     * Return the SHA-256 hash for a file, using the local scan-cache
+     * to avoid re-hashing files whose mtime and size haven't changed.
+     */
+    protected function resolveHash(string $path, int $mtime, int $size, string $absolutePath): string
+    {
+        if (! (\Illuminate\Support\Facades\Schema::hasTable('sync_local_cache'))) {
+            return hash_file('sha256', $absolutePath);
+        }
+
+        $cached = SyncLocalCache::query()->where('path', $path)->first();
+
+        if ($cached && (int) $cached->mtime === $mtime && (int) $cached->size === $size) {
+            return $cached->hash;
+        }
+
+        $hash = hash_file('sha256', $absolutePath);
+
+        SyncLocalCache::query()->updateOrCreate(
+            ['path' => $path],
+            ['mtime' => $mtime, 'size' => $size, 'hash' => $hash]
+        );
+
+        return $hash;
     }
 
     public function diff(array $sourceFiles, array $targetState): array
